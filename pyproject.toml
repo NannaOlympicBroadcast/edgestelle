@@ -1,0 +1,23 @@
+[project]
+name = "edgestelle"
+version = "0.1.0"
+description = "MQTT-based multi-node script execution system"
+requires-python = ">=3.10"
+dependencies = [
+    # --- Web 框架 ---
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    # --- MQTT ---
+    "paho-mqtt>=2.0",
+    # --- 数据库 ---
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.19",
+    # --- 加密 ---
+    "cryptography>=42.0",
+    # --- 配置 ---
+    "pydantic-settings>=2.1",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest", "pytest-asyncio"]

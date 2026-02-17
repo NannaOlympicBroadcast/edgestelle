@@ -1,0 +1,57 @@
+# ============================================================
+# EdgeStelle Docker Compose — 部署 Mosquitto Broker + Master
+# ============================================================
+#
+# 使用方法:
+#   1. 先运行 gen_certs.sh 生成 TLS 证书（可选）
+#   2. docker-compose up -d
+#
+
+services:
+  # ---------- MQTT Broker ----------
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: edgestelle-mosquitto
+    restart: always
+    ports:
+      - "1883:1883"     # 明文（开发用）
+      - "8883:8883"     # TLS（生产用）
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./certs:/mosquitto/certs:ro
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+    networks:
+      - edgestelle
+
+  # ---------- Master ----------
+  master:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: edgestelle-master
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    environment:
+      - MQTT_BROKER=mosquitto
+      - MQTT_PORT=1883
+      - DATABASE_URL=sqlite+aiosqlite:///./data/edgestelle.db
+    volumes:
+      - master-data:/app/data
+    depends_on:
+      - mosquitto
+    networks:
+      - edgestelle
+
+volumes:
+  mosquitto-data:
+  mosquitto-log:
+  master-data:
+
+networks:
+  edgestelle:
+    driver: bridge
