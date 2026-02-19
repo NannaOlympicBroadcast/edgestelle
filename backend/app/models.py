@@ -3,9 +3,9 @@ SQLAlchemy 2.0 ORM 模型 — test_templates / test_reports。
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, String, Text, text
+from sqlalchemy import DateTime, ForeignKey, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -37,12 +37,14 @@ class TestTemplate(Base):
         JSONB, nullable=False, comment="测试指标及阈值定义 (JSON)"
     )
     created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(timezone.utc),
+        DateTime(timezone=True),
+        server_default=func.now(),
         comment="创建时间",
     )
     updated_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
         comment="更新时间",
     )
 
@@ -85,7 +87,8 @@ class TestReport(Base):
         String(32), nullable=False, default="pending", comment="pending / analyzed"
     )
     created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(timezone.utc),
+        DateTime(timezone=True),
+        server_default=func.now(),
         comment="入库时间",
     )
 
