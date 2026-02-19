@@ -83,16 +83,37 @@ async def create_template(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
-    创建一个测试模板。模板包含测试指标名称、单位及阈值定义。
+    创建一个测试模板。模板包含测试指标名称、单位、阈值、业务语义及 AI 分析配置。
 
-    模板创建后，设备端 SDK 可通过 `GET /templates/{id}` 拉取，
-    并据此执行测试、填充数据后上报。
+    **示例请求体：**
+    ```json
+    {
+      "name": "智能摄像头深度测试",
+      "version": "2.0",
+      "schema_definition": {
+        "metrics": [
+          {"name": "npu_temp", "unit": "°C", "threshold_max": 80,
+           "description": "NPU 核心温度，决定了 AI 视觉算法的算力释放"},
+          {"name": "packet_loss_rate", "unit": "%", "threshold_max": 2,
+           "description": "网络丢包率，影响视频流的连续性"}
+        ],
+        "analysis_config": {
+          "custom_system_prompt": "你是安防摄像头领域的资深排障专家...",
+          "workflow_steps": [
+            "1. 首先排查 npu_temp 是否与画面卡顿有关联。",
+            "2. 如果温度过高，优先建议检查散热硅脂或外壳结构。"
+          ],
+          "focus_areas": ["散热系统", "网络稳定性"]
+        }
+      }
+    }
+    ```
     """
     template = TestTemplate(
         name=payload.name,
         version=payload.version,
         description=payload.description,
-        schema_definition=payload.schema_definition.model_dump(),
+        schema_definition=payload.schema_definition.model_dump(exclude_none=True),
     )
     db.add(template)
     await db.flush()

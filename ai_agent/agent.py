@@ -1,19 +1,17 @@
 """
-AI Agent 分析引擎 — 基于 LLM 的 IoT 测试报告智能诊断系统。
+AI Agent 分析引擎 — 数据驱动的 IoT 测试报告智能诊断系统。
 
-核心工作流:
-  1. 接收新报告触发 (由 mqtt_listener 的回调机制调用)
-  2. 从数据库读取 test_report + test_template
-  3. 对比阈值与实际数据，构建上下文
-  4. 调用 LLM 进行深度分析
-  5. 输出 Markdown 诊断报告，保存回数据库
+核心特性:
+  - 支持用户自定义 System Prompt (custom_system_prompt)
+  - 支持用户自定义分析工作流 (workflow_steps)
+  - 支持用户自定义重点关注领域 (focus_areas)
+  - 指标业务语义 (description) 注入分析上下文
+  - LLM 不可用时自动降级为规则引擎
 """
 
 import asyncio
-import json
 import logging
 import uuid
-from datetime import datetime, timezone
 
 from openai import AsyncOpenAI
 from sqlalchemy import select, update
@@ -25,11 +23,13 @@ from backend.app.models import TestReport, TestTemplate
 logger = logging.getLogger("edgestelle.ai_agent")
 settings = get_settings()
 
+
 # ═══════════════════════════════════════════════════════════════
-#  System Prompt
+#  默认 System Prompt (当用户未自定义时使用)
 # ═══════════════════════════════════════════════════════════════
 
-SYSTEM_PROMPT = """你是一位资深的嵌入式硬件测试专家，服务于 EdgeStelle IoT 设备自动化测试平台。
+DEFAULT_SYSTEM_PROMPT = """\
+你是一位资深的嵌入式硬件测试专家，服务于 EdgeStelle IoT 设备自动化测试平台。
 
 你的职责是：
 1. **数据审查**：仔细审查设备上报的每一项测试指标值。
@@ -37,7 +37,10 @@ SYSTEM_PROMPT = """你是一位资深的嵌入式硬件测试专家，服务于 
 3. **异常分析**：对超出阈值的指标进行深度分析，推断可能的硬件故障、固件缺陷或环境因素。
 4. **综合评分**：给出 0~100 分的综合健康评分。
 5. **修复建议**：提供具体、可操作的排查和修复建议。
+"""
 
+# 固定输出格式要求 (始终追加到 System Prompt 后)
+OUTPUT_FORMAT_INSTRUCTION = """
 ## 输出格式要求
 
 请严格按照以下 Markdown 格式输出诊断报告：
@@ -74,46 +77,94 @@ SYSTEM_PROMPT = """你是一位资深的嵌入式硬件测试专家，服务于 
 
 ## 注意事项
 - 即使所有指标均正常，也要给出综合评价和预防性建议。
-- 多个异常之间如有关联，应从系统层面综合分析（如 CPU 温度高+内存占用高 → 可能存在进程泄漏）。
+- 多个异常之间如有关联，应从系统层面综合分析。
 - 评分参考: 90-100 优秀, 70-89 良好, 50-69 警告, 0-49 严重。
 """
 
+
 # ═══════════════════════════════════════════════════════════════
-#  上下文构建
+#  动态 System Prompt 组装
+# ═══════════════════════════════════════════════════════════════
+
+
+def build_system_prompt(analysis_config: dict | None) -> str:
+    """
+    根据模板中的 analysis_config 动态组装 System Prompt。
+
+    优先级: custom_system_prompt > DEFAULT_SYSTEM_PROMPT
+    始终追加: 输出格式指令 + workflow_steps + focus_areas
+    """
+    config = analysis_config or {}
+
+    # 1. 基础角色 Prompt
+    base_prompt = config.get("custom_system_prompt") or DEFAULT_SYSTEM_PROMPT
+
+    parts = [base_prompt.strip()]
+
+    # 2. 追加工作流步骤
+    workflow_steps = config.get("workflow_steps")
+    if workflow_steps:
+        parts.append("\n## 诊断工作流\n\n请严格按照以下步骤顺序执行诊断：\n")
+        for step in workflow_steps:
+            parts.append(f"- {step}")
+
+    # 3. 追加重点关注领域
+    focus_areas = config.get("focus_areas")
+    if focus_areas:
+        parts.append("\n## 重点关注领域\n\n请优先分析以下领域的相关指标：\n")
+        for area in focus_areas:
+            parts.append(f"- **{area}**")
+
+    # 4. 始终追加输出格式指令
+    parts.append(OUTPUT_FORMAT_INSTRUCTION)
+
+    return "\n".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  上下文构建 (含指标语义)
 # ═══════════════════════════════════════════════════════════════
 
 
 def build_analysis_context(template: dict, report: dict) -> str:
     """
-    将模板阈值和设备实测数据整理为结构化上下文文本。
+    将模板阈值、指标语义和设备实测数据整理为结构化上下文文本。
+
+    新增: 每个指标的 description (业务语义) 会作为独立列注入上下文。
     """
     lines = []
-    lines.append(f"## 测试模板信息")
+    lines.append("## 测试模板信息")
     lines.append(f"- 模板名称: {template.get('name', '未知')}")
     lines.append(f"- 版本: {template.get('version', '未知')}")
     lines.append("")
 
-    # 模板中的指标定义
+    # 模板中的指标定义 (含 description)
     schema_def = template.get("schema_definition", {})
     template_metrics = {m["name"]: m for m in schema_def.get("metrics", [])}
 
-    lines.append(f"## 设备上报数据")
+    lines.append("## 设备上报数据")
     lines.append(f"- 设备 ID: {report.get('device_id', '未知')}")
     lines.append(f"- 上报时间: {report.get('timestamp', '未知')}")
     lines.append("")
 
+    # ── 指标详情表 (新增 "业务含义" 列) ──
     lines.append("## 指标详情")
     lines.append("")
-    lines.append("| 指标 | 单位 | 实际值 | 阈值上限 | 阈值下限 | 是否超标 |")
-    lines.append("|------|------|--------|----------|----------|----------|")
+    lines.append("| 指标 | 业务含义 | 单位 | 实际值 | 阈值上限 | 阈值下限 | 是否超标 |")
+    lines.append("|------|----------|------|--------|----------|----------|----------|")
 
     results = report.get("results", [])
     for r in results:
         name = r.get("name", "?")
         unit = r.get("unit", "")
         value = r.get("value", "N/A")
-        t_max = r.get("threshold_max", template_metrics.get(name, {}).get("threshold_max", "—"))
-        t_min = r.get("threshold_min", template_metrics.get(name, {}).get("threshold_min", "—"))
+
+        # 从模板定义中获取 description
+        tmpl_metric = template_metrics.get(name, {})
+        desc = tmpl_metric.get("description", "—")
+
+        t_max = r.get("threshold_max", tmpl_metric.get("threshold_max", "—"))
+        t_min = r.get("threshold_min", tmpl_metric.get("threshold_min", "—"))
 
         exceeded = "否"
         if t_max not in (None, "—") and isinstance(value, (int, float)):
@@ -123,7 +174,7 @@ def build_analysis_context(template: dict, report: dict) -> str:
             if value < float(t_min):
                 exceeded = "⚠️ 低于下限"
 
-        lines.append(f"| {name} | {unit} | {value} | {t_max} | {t_min} | {exceeded} |")
+        lines.append(f"| {name} | {desc} | {unit} | {value} | {t_max} | {t_min} | {exceeded} |")
 
     # 异常摘要
     anomaly_summary = report.get("anomaly_summary", [])
@@ -137,16 +188,18 @@ def build_analysis_context(template: dict, report: dict) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  LLM 调用
+#  LLM 调用 (动态 Prompt)
 # ═══════════════════════════════════════════════════════════════
 
 
-async def call_llm(context: str) -> str:
+async def call_llm(system_prompt: str, context: str) -> str:
     """
     调用大语言模型 API 进行分析。
 
     Parameters
     ----------
+    system_prompt : str
+        动态组装的 System Prompt (基于模板 analysis_config)。
     context : str
         结构化的测试数据上下文。
 
@@ -163,11 +216,12 @@ async def call_llm(context: str) -> str:
     user_message = f"请分析以下 IoT 设备的测试数据，并按格式输出诊断报告：\n\n{context}"
 
     logger.info("🤖 正在调用 LLM (%s) 进行分析…", settings.OPENAI_MODEL)
+    logger.debug("📝 System Prompt 长度: %d 字符", len(system_prompt))
 
     response = await client.chat.completions.create(
         model=settings.OPENAI_MODEL,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
         temperature=0.3,
@@ -186,7 +240,7 @@ async def call_llm(context: str) -> str:
 
 async def analyze_report(report_id: uuid.UUID) -> str | None:
     """
-    AI Agent 主流程：读取报告 → 构建上下文 → LLM 分析 → 结果存库。
+    AI Agent 主流程：读取报告 → 构建上下文 → 动态组装 Prompt → LLM 分析 → 结果存库。
 
     Parameters
     ----------
@@ -216,7 +270,7 @@ async def analyze_report(report_id: uuid.UUID) -> str | None:
         )
         template_obj = result.scalar_one_or_none()
 
-        # 构建上下文
+        # 构建模板数据
         template_data = {
             "name": template_obj.name if template_obj else "未知模板",
             "version": template_obj.version if template_obj else "?",
@@ -224,11 +278,22 @@ async def analyze_report(report_id: uuid.UUID) -> str | None:
         }
         report_data = report_obj.report_data
 
+        # ── 提取 analysis_config ──
+        schema_def = template_data.get("schema_definition", {})
+        analysis_config = schema_def.get("analysis_config")
+
+        # ── 动态组装 System Prompt ──
+        system_prompt = build_system_prompt(analysis_config)
+
+        # ── 构建分析上下文 (含指标语义) ──
         context = build_analysis_context(template_data, report_data)
+
+        logger.info("📋 analysis_config: %s",
+                     "用户自定义" if analysis_config else "使用默认")
 
         # 调用 LLM
         try:
-            analysis = await call_llm(context)
+            analysis = await call_llm(system_prompt, context)
         except Exception as e:
             logger.error("❌ LLM 调用失败: %s", e, exc_info=True)
             analysis = _fallback_analysis(template_data, report_data)
@@ -263,13 +328,17 @@ def _fallback_analysis(template: dict, report: dict) -> str:
     for r in results:
         name = r.get("name", "?")
         value = r.get("value")
-        t_max = r.get("threshold_max", template_metrics.get(name, {}).get("threshold_max"))
-        t_min = r.get("threshold_min", template_metrics.get(name, {}).get("threshold_min"))
+        tmpl = template_metrics.get(name, {})
+        t_max = r.get("threshold_max", tmpl.get("threshold_max"))
+        t_min = r.get("threshold_min", tmpl.get("threshold_min"))
+        desc = tmpl.get("description", "")
+
+        desc_hint = f" ({desc})" if desc else ""
 
         if t_max is not None and isinstance(value, (int, float)) and value > float(t_max):
-            anomalies.append(f"- **{name}** = {value}{r.get('unit', '')} — 超出上限 {t_max}")
+            anomalies.append(f"- **{name}**{desc_hint} = {value}{r.get('unit', '')} — 超出上限 {t_max}")
         elif t_min is not None and isinstance(value, (int, float)) and value < float(t_min):
-            anomalies.append(f"- **{name}** = {value}{r.get('unit', '')} — 低于下限 {t_min}")
+            anomalies.append(f"- **{name}**{desc_hint} = {value}{r.get('unit', '')} — 低于下限 {t_min}")
         else:
             normal_count += 1
 

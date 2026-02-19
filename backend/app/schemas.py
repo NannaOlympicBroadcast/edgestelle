@@ -23,6 +23,31 @@ class MetricDefinition(BaseModel):
     threshold_min: float | None = Field(
         None, examples=[0.0], description="下限阈值（低于即异常）"
     )
+    description: str | None = Field(
+        None,
+        examples=["NPU 核心温度，决定了 AI 视觉算法的算力释放"],
+        description="指标的业务语义描述，告知 AI Agent 该指标的含义和影响",
+    )
+
+
+class AnalysisConfig(BaseModel):
+    """用户自定义的 AI 分析配置 — 驱动 Agent 行为。"""
+
+    custom_system_prompt: str | None = Field(
+        None,
+        description="自定义系统提示词，覆盖默认的专家角色设定",
+        examples=["你是安防摄像头领域的资深排障专家，语气要严厉、专业，直接指出致命缺陷。"],
+    )
+    workflow_steps: list[str] | None = Field(
+        None,
+        description="自定义分析工作流步骤，Agent 将严格按此顺序执行诊断",
+        examples=[["1. 首先排查 npu_temp 是否与画面卡顿有关联。", "2. 如果温度过高，优先建议检查散热硅脂或外壳结构。"]],
+    )
+    focus_areas: list[str] | None = Field(
+        None,
+        description="重点关注的异常领域，Agent 会优先分析这些方面",
+        examples=[["散热系统", "网络稳定性", "固件兼容性"]],
+    )
 
 
 class SchemaDefinition(BaseModel):
@@ -30,6 +55,9 @@ class SchemaDefinition(BaseModel):
 
     metrics: list[MetricDefinition] = Field(
         ..., min_length=1, description="至少包含一个测试指标"
+    )
+    analysis_config: AnalysisConfig | None = Field(
+        None, description="AI 分析配置 — 自定义提示词、工作流和重点关注领域"
     )
 
 
