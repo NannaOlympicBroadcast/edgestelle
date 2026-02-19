@@ -1,0 +1,9 @@
+# EdgeStelle Backend — Python Dependencies (All Modules)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+sqlalchemy[asyncio]>=2.0.36
+asyncpg>=0.30.0
+pydantic-settings>=2.6.0
+paho-mqtt>=2.1.0
+requests>=2.32.0
+openai>=1.55.0

@@ -1,57 +1,50 @@
-# ============================================================
-# EdgeStelle Docker Compose — 部署 Mosquitto Broker + Master
-# ============================================================
-#
-# 使用方法:
-#   1. 先运行 gen_certs.sh 生成 TLS 证书（可选）
-#   2. docker-compose up -d
-#
+# ─────────────────────────────────────────────────────────────
+#  EdgeStelle — Docker Compose (Dev)
+#  Services: PostgreSQL 16  ·  Mosquitto MQTT Broker
+# ─────────────────────────────────────────────────────────────
 
 services:
-  # ---------- MQTT Broker ----------
+  # ── PostgreSQL ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: edgestelle-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-edgestelle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edgestelle_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-edgestelle}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edgestelle}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - edgestelle-net
+
+  # ── Mosquitto MQTT Broker ──
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: edgestelle-mosquitto
-    restart: always
+    restart: unless-stopped
     ports:
-      - "1883:1883"     # 明文（开发用）
-      - "8883:8883"     # TLS（生产用）
+      - "1883:1883"     # MQTT TCP
+      - "9001:9001"     # WebSocket (可选)
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
-      - ./certs:/mosquitto/certs:ro
-      - mosquitto-data:/mosquitto/data
-      - mosquitto-log:/mosquitto/log
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
     networks:
-      - edgestelle
-
-  # ---------- Master ----------
-  master:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    container_name: edgestelle-master
-    restart: always
-    ports:
-      - "8000:8000"
-    env_file:
-      - ../.env
-    environment:
-      - MQTT_BROKER=mosquitto
-      - MQTT_PORT=1883
-      - DATABASE_URL=sqlite+aiosqlite:///./data/edgestelle.db
-    volumes:
-      - master-data:/app/data
-    depends_on:
-      - mosquitto
-    networks:
-      - edgestelle
+      - edgestelle-net
 
 volumes:
-  mosquitto-data:
-  mosquitto-log:
-  master-data:
+  pg_data:
+  mosquitto_data:
+  mosquitto_log:
 
 networks:
-  edgestelle:
+  edgestelle-net:
     driver: bridge
