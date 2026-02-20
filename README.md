@@ -1,15 +1,66 @@
-# EdgeStelle — IoT 设备自动化测试与 AI Agent 分析系统
+# EdgeStelle — IoT 设备自动化测试与 AI Agent 分析平台
 
 ## 概述
 
-EdgeStelle 是一个端到端的 IoT 设备自动化测试平台：
+EdgeStelle 是一个端到端的 IoT 设备自动化测试平台，支持模板化指标定义、设备 SDK 自动化上报、AI 智能诊断分析、飞书生态集成与现代化 Web 管理 UI。
 
 | 模块 | 技术栈 | 职责 |
 |------|--------|------|
-| 云端后端 | FastAPI + PostgreSQL | 管理测试模板、存储报告、提供 API |
-| 设备 SDK | Python / C++ | 拉取模板、执行测试、MQTT 上报 |
-| MQTT 监听 | paho-mqtt | 订阅设备上报、校验入库 |
-| AI Agent | OpenAI API | 智能分析异常、输出诊断报告 |
+| 云端后端 | FastAPI + PostgreSQL + SQLAlchemy 2 | API、鉴权、模板/报告管理 |
+| Web 管理端 | React 19 + Vite 6 + TailwindCSS v4 | 仪表盘、报告查看、模板/Key 管理 |
+| 设备 SDK | Python / C++ | 拉取模板、执行测试、MQTT / HTTP 上报 |
+| MQTT 监听 | paho-mqtt | 订阅设备 Topic、校验入库 |
+| AI Agent | OpenAI-compatible API | 异常分析、Markdown 诊断报告 |
+| 飞书集成 | Feishu Open API | OAuth 登录、云文档创建、群消息卡片推送 |
+
+---
+
+## 项目结构
+
+```
+edgestelle/
+├── backend/
+│   ├── app/
+│   │   ├── config.py              # 配置管理 (pydantic-settings)
+│   │   ├── database.py            # 异步 DB 引擎 (asyncpg)
+│   │   ├── models.py              # ORM: TestTemplate / TestReport / User / ApiKey / SystemConfig
+│   │   ├── schemas.py             # Pydantic v2 请求/响应 Schema
+│   │   ├── security.py            # JWT 签发/验证 + API Key 哈希
+│   │   ├── dependencies.py        # 鉴权依赖 (Bearer JWT + X-API-Key)
+│   │   ├── main.py                # FastAPI 入口 (Router 注册 + CORS + Lifespan)
+│   │   ├── mqtt_listener.py       # MQTT 订阅 + 入库 + AI 回调
+│   │   ├── routers/
+│   │   │   ├── auth.py            # 飞书 OAuth 登录 / callback / /me
+│   │   │   ├── api_keys.py        # API Key 创建/查看/撤销
+│   │   │   ├── templates.py       # 测试模板 CRUD
+│   │   │   ├── reports.py         # 报告列表/详情/手动分析
+│   │   │   └── system_config.py   # 系统配置 (管理员)
+│   │   └── integrations/
+│   │       └── feishu.py          # 飞书 API: 文档创建 + 消息卡片
+│   └── requirements.txt
+├── web/                           # React 前端
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── src/
+│   │   ├── App.tsx                # 路由配置
+│   │   ├── index.css              # 暗色主题设计系统
+│   │   ├── stores/authStore.ts    # Zustand JWT 持久化
+│   │   ├── lib/api.ts             # Axios + 自动鉴权拦截器
+│   │   ├── components/Layout.tsx  # 侧边栏布局
+│   │   └── pages/                 # 登录/仪表盘/报告/模板/Key/设置
+│   └── index.html
+├── ai_agent/
+│   ├── agent.py                   # AI 分析引擎 + 飞书推送
+│   └── requirements.txt
+├── device_sdk/
+│   ├── python/                    # Python SDK
+│   └── cpp/                       # C++ SDK
+├── deploy/
+│   ├── docker-compose.yml         # PostgreSQL + Mosquitto
+│   └── mosquitto/mosquitto.conf
+├── .env.example
+└── README.md
+```
 
 ---
 
@@ -17,10 +68,10 @@ EdgeStelle 是一个端到端的 IoT 设备自动化测试平台：
 
 ### 1.1 系统要求
 
-- Linux 服务器 (推荐 Ubuntu 22.04 / CentOS 8+)
 - Python 3.11+
+- Node.js 20+ (前端)
 - Docker & Docker Compose
-- (可选) C++ 编译环境 (g++ 10+, CMake 3.16+)
+- (可选) C++ 编译环境
 
 ### 1.2 克隆项目
 
@@ -35,24 +86,41 @@ cd edgestelle
 cp .env.example .env
 ```
 
-编辑 `.env`，按需修改以下关键配置：
+编辑 `.env`，填入以下配置：
 
 ```env
-# 数据库（与 docker-compose 中一致即可）
+# ─── 数据库（与 docker-compose 一致即可）───
 POSTGRES_USER=edgestelle
 POSTGRES_PASSWORD=edgestelle_secret
 POSTGRES_DB=edgestelle
 DATABASE_URL=postgresql+asyncpg://edgestelle:edgestelle_secret@localhost:5432/edgestelle
 
-# MQTT
+# ─── MQTT ───
 MQTT_BROKER_HOST=localhost
 MQTT_BROKER_PORT=1883
 
-# AI Agent（必须配置才能使用 LLM 分析，否则降级为规则引擎）
+# ─── AI Agent（必须配置才能使用 LLM 分析，否则降级为规则引擎）───
 OPENAI_API_KEY=sk-your-real-key
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o
+
+# ─── JWT（生产环境请使用强随机密钥）───
+JWT_SECRET_KEY=change-me-to-a-random-secret
+JWT_ALGORITHM=HS256
+JWT_EXPIRE_MINUTES=1440
+
+# ─── 飞书 OAuth（从飞书开放平台获取）───
+FEISHU_APP_ID=cli_xxxxx
+FEISHU_APP_SECRET=xxxxx
+FEISHU_REDIRECT_URI=http://localhost:8000/api/v1/auth/feishu/callback
+FEISHU_BOT_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxxxx
+
+# ─── 前端 ───
+FRONTEND_URL=http://localhost:5173
 ```
+
+> **提示：** `JWT_SECRET_KEY` 在生产环境中应使用 `openssl rand -hex 32` 生成。  
+> 飞书凭证从 [飞书开放平台](https://open.feishu.cn) 创建应用后获取。
 
 ---
 
@@ -65,56 +133,57 @@ cd deploy
 docker compose up -d
 ```
 
-验证服务状态：
+验证：
 
 ```bash
-# 查看容器
 docker compose ps
+# edgestelle-postgres    running (healthy)
+# edgestelle-mosquitto   running
 
-# 预期输出:
-#   edgestelle-postgres    running (healthy)
-#   edgestelle-mosquitto   running
-
-# 验证数据库可连接
 docker exec edgestelle-postgres pg_isready -U edgestelle
 # → accepting connections
 ```
 
-### 2.2 安装 Python 依赖
+### 2.2 安装后端依赖
 
 ```bash
-cd ~/edgestelle
+cd edgestelle
 
 # 建议使用虚拟环境
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-# 安装后端 + Agent 全部依赖
 pip install -r backend/requirements.txt
 pip install -r ai_agent/requirements.txt
-pip install -r device_sdk/python/requirements.txt
+```
+
+### 2.3 安装前端依赖
+
+```bash
+cd web
+npm install
 ```
 
 ---
 
-## 三、启动后端服务
+## 三、启动服务
+
+### 3.1 启动后端
 
 ```bash
-cd ~/edgestelle
+cd edgestelle
 uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**启动成功日志：**
+启动时自动完成：**自动建表** → **启动 MQTT 监听** → **注册 AI Agent 回调**。
+
 ```
 ✅ MQTT 已连接并订阅 iot/test/report/#
 🚀 MQTT 监听已启动 — localhost:1883
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
-> 启动时自动执行：建表 → 启动 MQTT 监听 → 注册 AI Agent 回调。
-> 如果 Broker 未就绪，会打印警告但不影响 API 正常使用。
-
-**验证健康状态：**
+验证：
 ```bash
 curl http://localhost:8000/health
 # → {"status":"ok","service":"edgestelle-backend"}
@@ -122,16 +191,69 @@ curl http://localhost:8000/health
 
 **Swagger UI：** 浏览器打开 `http://<server>:8000/docs`
 
+### 3.2 启动前端
+
+```bash
+cd web
+npm run dev
+```
+
+```
+VITE v6.x.x ready in xxx ms
+➜ Local:   http://localhost:5173/
+```
+
+浏览器打开 `http://localhost:5173`，通过飞书 OAuth 登录后进入管理面板。
+
+> **开发模式提示：** Vite 已配置 API 代理，所有 `/api` 请求自动转发到 `localhost:8000`，无需手动处理跨域。
+
 ---
 
-## 四、创建测试模板
+## 四、鉴权体系
 
-模板定义了"测试哪些指标、阈值是多少、AI 如何分析"。
+EdgeStelle 采用**双重鉴权**机制：
 
-### 4.1 基础模板（最小化）
+| 方式 | 头部 | 适用场景 |
+|------|------|---------|
+| JWT Bearer Token | `Authorization: Bearer <token>` | Web UI 用户登录后的 API 访问 |
+| API Key | `X-API-Key: esk_xxxx...` | 设备端 SDK / 无人值守脚本 |
+
+### 4.1 飞书 OAuth 登录（Web UI 用户）
+
+1. 前端跳转至 `/api/v1/auth/feishu/login` 获取飞书授权 URL
+2. 用户在飞书中授权后，飞书回调到 `/api/v1/auth/feishu/callback`
+3. 后端自动注册/更新用户信息，签发 JWT，重定向至前端
+4. 前端存储 JWT，后续请求自动附加 `Bearer` 头
+
+### 4.2 API Key（设备 SDK）
+
+登录 Web UI 后，在 **「API Key」** 页面生成密钥：
+
+```bash
+# 或通过 CLI (需已登录，拿到 JWT)
+curl -X POST http://localhost:8000/api/v1/api-keys \
+  -H "Authorization: Bearer <JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "生产线A设备"}'
+```
+
+> **⚠️ 重要：** 密钥仅在创建时返回一次，请立即保存。后端仅存储 SHA-256 哈希。
+
+SDK 使用时附加 `X-API-Key` 头：
+
+```bash
+export EDGESTELLE_API_KEY=esk_xxxxxxxxxxxxxxxx
+```
+
+---
+
+## 五、创建测试模板
+
+### 5.1 基础模板
 
 ```bash
 curl -s -X POST http://localhost:8000/api/v1/templates \
+  -H "Authorization: Bearer <JWT>" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "边缘设备标准测试",
@@ -147,20 +269,11 @@ curl -s -X POST http://localhost:8000/api/v1/templates \
   }' | python -m json.tool
 ```
 
-**返回示例（记下 `id`，后续步骤要用）：**
-```json
-{
-    "id": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
-    "name": "边缘设备标准测试",
-    "version": "1.0",
-    ...
-}
-```
-
-### 4.2 高级模板（含指标语义 + AI 分析配置）
+### 5.2 高级模板（含 AI 自定义分析）
 
 ```bash
 curl -s -X POST http://localhost:8000/api/v1/templates \
+  -H "Authorization: Bearer <JWT>" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "智能摄像头深度测试",
@@ -188,145 +301,56 @@ curl -s -X POST http://localhost:8000/api/v1/templates \
         }
       ],
       "analysis_config": {
-        "custom_system_prompt": "你是安防摄像头领域的资深排障专家，语气严厉、专业，直接指出致命缺陷。",
+        "custom_system_prompt": "你是安防摄像头领域的资深排障专家。",
         "workflow_steps": [
-          "1. 首先排查 npu_temp 是否与画面推理卡顿有关联。",
-          "2. 如果温度过高，优先建议检查散热硅脂或外壳结构设计。",
-          "3. 检查 memory_usage 与 npu_temp 的关联性，判断是否存在内存泄漏。",
-          "4. 最后评估网络指标，结合丢包率给出整体诊断。"
+          "1. 排查 npu_temp 与画面卡顿的关联。",
+          "2. 检查散热系统。",
+          "3. 分析 memory_usage 与温度的关联性。",
+          "4. 评估网络指标，给出整体诊断。"
         ],
-        "focus_areas": ["散热系统", "NPU 算力释放", "网络稳定性"]
+        "focus_areas": ["散热系统", "NPU 算力", "网络稳定性"]
       }
     }
   }' | python -m json.tool
 ```
 
-> **要点：**
-> - `description` — 告诉 AI Agent 这个指标的业务含义
-> - `analysis_config.custom_system_prompt` — 覆盖默认专家角色
-> - `analysis_config.workflow_steps` — 强制 Agent 按此顺序分析
-> - `analysis_config.focus_areas` — Agent 优先关注的领域
-> - 这些字段都是**可选的**，不填则使用默认行为
-
-### 4.3 查询已创建的模板
-
-```bash
-# 列表
-curl -s http://localhost:8000/api/v1/templates | python -m json.tool
-
-# 详情（替换 <TEMPLATE_ID>）
-curl -s http://localhost:8000/api/v1/templates/<TEMPLATE_ID> | python -m json.tool
-```
+> **说明：** `analysis_config` 中的字段均为可选，不填则使用 AI Agent 默认行为。
 
 ---
 
-## 五、使用 Python SDK 执行测试并上报
+## 六、使用 Python SDK 测试上报
 
-### 5.1 命令行快速运行
+### 6.1 快速运行
 
 ```bash
-cd ~/edgestelle
-
-# 设置设备参数
 export API_BASE_URL=http://localhost:8000
 export MQTT_BROKER_HOST=localhost
-export MQTT_BROKER_PORT=1883
 export DEVICE_ID=edge-cam-001
+# (可选) export EDGESTELLE_API_KEY=esk_xxxx  # SDK 鉴权
 
-# 运行（替换 <TEMPLATE_ID> 为第四步返回的 id）
 python -m device_sdk.python.sdk <TEMPLATE_ID>
 ```
 
-**完整输出示例：**
-```
-📥 正在拉取模板 — http://localhost:8000/api/v1/templates/a1b2c3d4-...
-✅ 模板已获取 — name=智能摄像头深度测试 version=2.0
-🧪 开始执行测试 — 3 个指标
-📊 测试完成 — 异常指标: ['npu_temp=83.21°C (> 80)']
-✅ MQTT 已连接 — broker=localhost:1883
-📡 发布到 iot/test/report/edge-cam-001 — payload_size=487 bytes
-📤 报告已发布 — mid=1
-
-✅ 测试报告已上报:
-{
-  "template_id": "a1b2c3d4-...",
-  "device_id": "edge-cam-001",
-  "timestamp": "2026-02-19T14:05:23+00:00",
-  "results": [
-    {"name": "npu_temp", "unit": "°C", "value": 83.21, "threshold_max": 80},
-    ...
-  ],
-  "has_anomaly": true,
-  "anomaly_summary": ["npu_temp=83.21°C (> 80)"]
-}
-```
-
-**同时后端日志会显示：**
-```
-📩 收到消息 — topic=iot/test/report/edge-cam-001
-💾 报告已入库 — id=xxxx
-🔔 触发 AI 分析 — report_id=xxxx device=edge-cam-001
-📋 analysis_config: 用户自定义
-🤖 正在调用 LLM (gpt-4o) 进行分析…
-✅ LLM 分析完成 — 输出 1523 字符
-💾 分析结果已保存
-```
-
-### 5.2 在代码中集成 SDK
-
-在自己的 Python 脚本中使用 SDK 执行测试：
+### 6.2 代码集成
 
 ```python
-"""示例：在代码中使用 EdgeStelle SDK"""
 import os
-
-# 1. 配置
 os.environ["API_BASE_URL"] = "http://your-server:8000"
-os.environ["MQTT_BROKER_HOST"] = "your-server"
 os.environ["DEVICE_ID"] = "edge-cam-001"
 
 from device_sdk.python.device_config import DeviceConfig
 from device_sdk.python.sdk import EdgeStelleSDK
 
-# 2. 初始化 SDK
-config = DeviceConfig()
-sdk = EdgeStelleSDK(config)
-
-# 3. 完整流程：拉取模板 → 执行测试 → 上报
-template_id = "a1b2c3d4-5678-90ab-cdef-1234567890ab"
-report = sdk.run(template_id)
-print(f"上报完成，设备: {report['device_id']}")
-print(f"异常: {report['anomaly_summary']}")
-
-# 4. 断开连接
-sdk.disconnect()
-```
-
-**也可以分步执行（适合需要自定义测试数据的场景）：**
-
-```python
-from device_sdk.python.device_config import DeviceConfig
-from device_sdk.python.sdk import EdgeStelleSDK
-
 sdk = EdgeStelleSDK(DeviceConfig())
 
-# 步骤 A：拉取模板
-template = sdk.fetch_template("a1b2c3d4-...")
-print(f"模板: {template['name']}, 共 {len(template['schema_definition']['metrics'])} 个指标")
+# 完整流程：拉取模板 → 执行测试 → MQTT 上报
+report = sdk.run("<TEMPLATE_ID>")
+print(f"异常: {report['anomaly_summary']}")
 
-# 步骤 B：执行模拟测试（生成数据）
-report = sdk.execute_test(template)
-
-# ——— 可选：替换为真实传感器数据 ———
-# report["results"][0]["value"] = read_real_npu_temp()
-# report["results"][1]["value"] = get_real_memory_usage()
-
-# 步骤 C：上报
-sdk.publish_report(report)
 sdk.disconnect()
 ```
 
-### 5.3 模拟多台设备批量测试
+### 6.3 批量模拟
 
 ```bash
 for dev in cam-001 cam-002 cam-003 cam-004 cam-005; do
@@ -338,94 +362,129 @@ echo "全部设备测试完成"
 
 ---
 
-## 六、查看分析结果
+## 七、查看分析结果
 
-### 6.1 查看已分析的报告
+### 7.1 Web UI
+
+登录 `http://localhost:5173`：
+
+- **仪表盘**：报告统计卡片 + 最新报告列表
+- **报告详情**：原始数据 JSON + AI 分析 Markdown 渲染
+- **模板管理**：模板列表 + 创建
+- **API Key**：密钥生成 / 撤销
+- **系统设置**：飞书 Webhook 等配置
+
+### 7.2 API 查询
 
 ```bash
-# 列出所有已分析的报告
-curl -s "http://localhost:8000/api/v1/reports?status=analyzed" | python -m json.tool
+# 已分析的报告
+curl -s "http://localhost:8000/api/v1/reports?status=analyzed" \
+  -H "Authorization: Bearer <JWT>" | python -m json.tool
 
-# 查看单份报告（ai_analysis 字段包含完整的 Markdown 诊断）
-curl -s http://localhost:8000/api/v1/reports/<REPORT_ID> | python -m json.tool
+# 单份详情 (ai_analysis 字段含 Markdown 诊断)
+curl -s http://localhost:8000/api/v1/reports/<REPORT_ID> \
+  -H "Authorization: Bearer <JWT>" | python -m json.tool
+
+# 手动触发重新分析
+curl -s -X POST http://localhost:8000/api/v1/reports/<REPORT_ID>/analyze \
+  -H "Authorization: Bearer <JWT>" | python -m json.tool
 ```
 
-### 6.2 手动触发 / 重新分析
+---
+
+## 八、飞书集成
+
+### 8.1 OAuth 登录
+
+在 [飞书开放平台](https://open.feishu.cn) 创建应用，配置：
+- **重定向 URL**：`http://<your-domain>:8000/api/v1/auth/feishu/callback`
+- **权限**：`contact:user.base:readonly`
+- 将 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 填入 `.env`
+
+### 8.2 AI 报告自动推送
+
+当 AI Agent 分析完成后，自动执行：
+
+1. **创建飞书云文档** — 将 Markdown 诊断报告写入飞书文档
+2. **发送消息卡片** — 通过 Bot Webhook 推送到指定群，包含：
+   - 综合评分
+   - 异常摘要
+   - 快速跳转按钮（飞书文档 / WebUI）
+
+配置方式：
+- **环境变量**：`.env` 中设置 `FEISHU_BOT_WEBHOOK_URL`
+- **运行时**：Web UI「系统设置」中配置 `feishu_bot_webhook_url`
+
+> 未配置飞书凭证时该功能静默跳过，不影响核心分析流程。
+
+---
+
+## 九、数据流示意
+
+```
+Device SDK               Cloud Backend                    AI Agent       飞书
+    │                         │                              │            │
+    │  ① GET /templates/{id}  │                              │            │
+    │────────────────────────>│                              │            │
+    │  ← 模板 JSON            │                              │            │
+    │                         │                              │            │
+    │  ② 执行测试             │                              │            │
+    │  ③ 生成报告             │                              │            │
+    │                         │                              │            │
+    │  ④ MQTT Publish ───────>│  MQTT Listener              │            │
+    │  (iot/test/report/xxx)  │  ⑤ 校验 → 入库              │            │
+    │                         │  ⑥ 触发回调 ────────────────>│            │
+    │                         │                   ⑦ 读取报告+模板         │
+    │                         │                   ⑧ 动态组装 Prompt      │
+    │                         │                   ⑨ 调用 LLM             │
+    │                         │  ⑩ 分析存库  <───────────────│            │
+    │                         │                   ⑪ 创建文档 ───────────>│
+    │                         │                   ⑫ 推送卡片 ───────────>│
+```
+
+---
+
+## API 端点一览
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/health` | ❌ | 健康检查 |
+| GET | `/api/v1/auth/feishu/login` | ❌ | 获取飞书授权 URL |
+| GET | `/api/v1/auth/feishu/callback` | ❌ | 飞书 OAuth 回调 → JWT |
+| GET | `/api/v1/auth/me` | ✅ JWT | 当前用户信息 |
+| POST | `/api/v1/api-keys` | ✅ | 创建 API Key |
+| GET | `/api/v1/api-keys` | ✅ | 列出 API Key |
+| DELETE | `/api/v1/api-keys/{id}` | ✅ | 撤销 API Key |
+| GET | `/api/v1/templates` | ❌ | 模板列表 |
+| GET | `/api/v1/templates/{id}` | ❌ | 模板详情 (SDK 拉取) |
+| POST | `/api/v1/templates` | ✅ | 创建模板 |
+| GET | `/api/v1/reports` | ✅ | 报告列表 (`?device_id=` / `?status=`) |
+| GET | `/api/v1/reports/{id}` | ✅ | 报告详情 (含 `ai_analysis`) |
+| POST | `/api/v1/reports/{id}/analyze` | ✅ | 手动触发 AI 分析 |
+| GET | `/api/v1/system/config` | 🔒 Admin | 系统配置列表 |
+| PUT | `/api/v1/system/config` | 🔒 Admin | 批量更新系统配置 |
+
+> **鉴权说明：** ✅ = Bearer JWT 或 X-API-Key 均可；🔒 Admin = 仅管理员 JWT
+
+---
+
+## 生产部署建议
+
+| 事项 | 建议 |
+|------|------|
+| **JWT 密钥** | `openssl rand -hex 32` 生成强密钥 |
+| **数据库** | 使用 Alembic 管理迁移；生产环境启用 SSL |
+| **HTTPS** | Nginx/Caddy 反代，配置 Let's Encrypt |
+| **前端构建** | `cd web && npm run build`，产物位于 `web/dist/`，静态托管或 Nginx 服务 |
+| **进程管理** | Systemd / Supervisor / PM2 管理后端进程 |
+| **日志** | 配置 `logging` 输出到文件 + 日志轮转 |
+| **飞书回调** | 替换 `FEISHU_REDIRECT_URI` 为公网域名 |
 
 ```bash
-curl -s -X POST http://localhost:8000/api/v1/reports/<REPORT_ID>/analyze | python -m json.tool
-```
+# 前端生产构建
+cd web && npm run build
+# 产物在 web/dist/，可用 Nginx 或 CDN 托管
 
----
-
-## 七、数据流示意
-
-```
-Device SDK               Cloud Backend                    AI Agent
-    │                         │                              │
-    │  ① GET /templates/{id}  │                              │
-    │────────────────────────>│                              │
-    │  ← 模板 JSON            │                              │
-    │                         │                              │
-    │  ② 模拟/真实测试         │                              │
-    │  ③ Fill 模板生成报告     │                              │
-    │                         │                              │
-    │  ④ MQTT Publish ───────>│  MQTT Listener              │
-    │  (iot/test/report/xxx)  │  ⑤ 校验 JSON → 入库          │
-    │                         │  ⑥ 触发回调 ────────────────>│
-    │                         │                   ⑦ 读取报告+模板
-    │                         │                   ⑧ 动态组装 Prompt
-    │                         │                   ⑨ 调用 LLM
-    │                         │  ⑩ 分析结果存库  <────────────│
-    │                         │                              │
-```
-
----
-
-## API 接口一览
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/v1/templates` | 创建测试模板 |
-| GET  | `/api/v1/templates` | 模板列表 |
-| GET  | `/api/v1/templates/{id}` | 模板详情 |
-| GET  | `/api/v1/reports` | 报告列表 (`?device_id=` / `?status=`) |
-| GET  | `/api/v1/reports/{id}` | 报告详情 (含 `ai_analysis`) |
-| POST | `/api/v1/reports/{id}/analyze` | 手动触发 AI 分析 |
-| GET  | `/health` | 健康检查 |
-
----
-
-## 项目结构
-
-```
-edgestelle/
-├── backend/
-│   ├── app/
-│   │   ├── config.py          # 配置管理 (pydantic-settings)
-│   │   ├── database.py        # 异步数据库引擎
-│   │   ├── models.py          # ORM: TestTemplate / TestReport
-│   │   ├── schemas.py         # Pydantic 校验 (含 AnalysisConfig)
-│   │   ├── main.py            # FastAPI 入口 + 全部路由
-│   │   └── mqtt_listener.py   # MQTT 订阅 + 入库 + 回调
-│   └── requirements.txt
-├── device_sdk/
-│   ├── python/
-│   │   ├── sdk.py             # Python SDK 完整工作流
-│   │   ├── test_runner.py     # 模拟硬件测试数据生成
-│   │   ├── device_config.py   # 设备配置
-│   │   └── requirements.txt
-│   └── cpp/
-│       ├── edgestelle_device.hpp  # C++ 头文件 SDK
-│       ├── main.cpp               # C++ 示例入口
-│       └── CMakeLists.txt
-├── ai_agent/
-│   ├── agent.py               # AI 分析引擎 (数据驱动 Prompt)
-│   └── requirements.txt
-├── deploy/
-│   ├── docker-compose.yml     # PostgreSQL + Mosquitto
-│   └── mosquitto/
-│       └── mosquitto.conf
-├── .env.example
-└── README.md
+# 后端生产启动 (示例)
+uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```

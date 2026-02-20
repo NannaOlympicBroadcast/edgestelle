@@ -128,3 +128,86 @@ class MessageResponse(BaseModel):
 
     message: str
     detail: str | None = None
+
+
+# ────────────────────────── User / Auth ──────────────────────────
+
+
+class UserResponse(BaseModel):
+    """用户信息响应。"""
+
+    id: uuid.UUID
+    feishu_open_id: str
+    nickname: str
+    avatar_url: str | None
+    is_admin: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TokenResponse(BaseModel):
+    """JWT 令牌响应。"""
+
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+# ────────────────────────── API Key ──────────────────────────
+
+
+class ApiKeyCreate(BaseModel):
+    """创建 API Key 请求体。"""
+
+    name: str = Field(default="Default", max_length=128, description="Key 别名")
+
+
+class ApiKeyResponse(BaseModel):
+    """API Key 列表项 (不含密钥明文)。"""
+
+    id: uuid.UUID
+    name: str
+    key_prefix: str
+    is_active: bool
+    created_at: datetime
+    last_used_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class ApiKeyCreatedResponse(BaseModel):
+    """创建 API Key 后一次性返回的响应 (含明文)。"""
+
+    id: uuid.UUID
+    name: str
+    key_prefix: str
+    raw_key: str = Field(..., description="明文密钥 — 仅此一次展示，请妥善保存")
+    created_at: datetime
+
+
+# ────────────────────────── System Config ──────────────────────────
+
+
+class SystemConfigItem(BaseModel):
+    """单项配置。"""
+
+    key: str
+    value: str
+
+
+class SystemConfigResponse(BaseModel):
+    """系统配置响应。"""
+
+    key: str
+    value: str
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SystemConfigUpdate(BaseModel):
+    """批量更新系统配置请求体。"""
+
+    configs: list[SystemConfigItem]
+

@@ -32,10 +32,24 @@ class Settings(BaseSettings):
     MQTT_USERNAME: str = ""
     MQTT_PASSWORD: str = ""
 
-    # ── AI Agent (步骤四预留) ──
+    # ── AI Agent ──
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     OPENAI_MODEL: str = "gpt-4o"
+
+    # ── JWT ──
+    JWT_SECRET_KEY: str = "edgestelle-dev-secret-change-me"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = 1440  # 24 hours
+
+    # ── Feishu (飞书) ──
+    FEISHU_APP_ID: str = ""
+    FEISHU_APP_SECRET: str = ""
+    FEISHU_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/feishu/callback"
+    FEISHU_BOT_WEBHOOK_URL: str = ""
+
+    # ── Frontend ──
+    FRONTEND_URL: str = "http://localhost:5173"
 
 
 @lru_cache

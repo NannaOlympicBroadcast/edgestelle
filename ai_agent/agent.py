@@ -307,6 +307,17 @@ async def analyze_report(report_id: uuid.UUID) -> str | None:
         await session.commit()
         logger.info("💾 分析结果已保存 — report_id=%s", report_id)
 
+        # ── 飞书集成 (可选) ──
+        try:
+            await _push_to_feishu(
+                report_id=report_id,
+                device_id=report_data.get("device_id", "unknown"),
+                analysis=analysis,
+                anomaly_summary=report_data.get("anomaly_summary", []),
+            )
+        except Exception as e:
+            logger.warning("⚠️ 飞书推送失败 (不影响主流程): %s", e)
+
         return analysis
 
 
@@ -358,6 +369,85 @@ def _fallback_analysis(template: dict, report: dict) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  飞书推送
+# ═══════════════════════════════════════════════════════════════
+
+import re
+
+
+async def _push_to_feishu(
+    report_id: uuid.UUID,
+    device_id: str,
+    analysis: str,
+    anomaly_summary: list,
+) -> None:
+    """
+    将分析结果推送到飞书 (创建文档 + 发送卡片)。
+
+    仅在飞书配置完整时执行，否则静默跳过。
+    """
+    if not settings.FEISHU_APP_ID or not settings.FEISHU_APP_SECRET:
+        logger.debug("飞书未配置，跳过推送")
+        return
+
+    from backend.app.integrations.feishu import (
+        create_feishu_doc,
+        build_alert_card,
+        send_message_card,
+    )
+
+    # 提取综合评分
+    score_match = re.search(r"综合评分[:\s]*(\d+)/100", analysis)
+    score = score_match.group(0) if score_match else "N/A"
+
+    # 1. 创建飞书文档
+    title = f"EdgeStelle 诊断报告 — {device_id}"
+    doc_url = await create_feishu_doc(title, analysis)
+
+    # 2. 构建并发送消息卡片
+    webui_url = f"{settings.OPENAI_BASE_URL.replace('/v1', '')}"  # fallback
+    try:
+        from backend.app.config import get_settings as _get_settings
+        _s = _get_settings()
+        webui_url = f"{_s.FRONTEND_URL}/reports/{report_id}"
+    except Exception:
+        webui_url = f"http://localhost:5173/reports/{report_id}"
+
+    webhook_url = settings.FEISHU_BOT_WEBHOOK_URL
+
+    # 也尝试从数据库 SystemConfig 读取
+    if not webhook_url:
+        try:
+            from backend.app.database import async_session as _async_session
+            from backend.app.models import SystemConfig
+            from sqlalchemy import select as _select
+
+            async with _async_session() as session:
+                result = await session.execute(
+                    _select(SystemConfig).where(SystemConfig.key == "feishu_bot_webhook_url")
+                )
+                config = result.scalar_one_or_none()
+                if config:
+                    webhook_url = config.value
+        except Exception:
+            pass
+
+    if not webhook_url:
+        logger.info("📄 飞书文档已创建: %s (未配置 Webhook，跳过卡片推送)", doc_url)
+        return
+
+    card = build_alert_card(
+        device_id=device_id,
+        score=score,
+        anomaly_summary=anomaly_summary,
+        doc_url=doc_url,
+        webui_url=webui_url,
+    )
+    await send_message_card(webhook_url, card)
+    logger.info("✅ 飞书推送完成 — device=%s doc=%s", device_id, doc_url)
+
+
+# ═══════════════════════════════════════════════════════════════
 #  MQTT 触发回调
 # ═══════════════════════════════════════════════════════════════
 
@@ -374,3 +464,4 @@ async def on_new_report(report_id: uuid.UUID, payload: dict):
             logger.info("📄 分析完成，前 100 字符:\n%s", analysis[:100])
     except Exception as e:
         logger.error("❌ AI 分析流程异常: %s", e, exc_info=True)
+
